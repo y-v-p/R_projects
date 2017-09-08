@@ -1,0 +1,249 @@
+---
+title: "Report on Family Statistics from Census 2011 data for Atlantic region of Canada"
+output:
+  html_document:
+    code_folding: show
+---
+
+## Introduction
+Canadian Census 2011 data are organized in a table saved in CSV format. The columns most relevant to this report are Prov_name, Topic, Characteristic and Total. The topic column contains description of the census topics. The one of interest to us is **"Family characteristic"** and characteristics themselves including many categories and their sub-categories such as, for example, the ***total number of families, numbers of families of different sizes, number of married couples, number of common-law couples with 2 children*** and many other. Another possible topic of interest would be *"Household and dwelling characteristics"* since some of its characteristics contain family-related information but it is not included in this report at the time.
+
+### Connect some libraries needed for later (might need to install them if missing)
+```{r setup, message=FALSE}
+library("magrittr")
+library("dplyr")
+library("reshape2")
+library("RColorBrewer")
+library("knitr")
+library("rmarkdown")
+```
+
+## Data import and transformation
+Let's import the CSV file into a data frame. *Note:the first row inside the csv is not useful and needs to be skipped so headers are extracted separetely and added as column names*
+```{r}
+headers = read.csv("Question2sample.csv", skip = 1, header = F, nrows = 1, as.is = T, stringsAsFactors=FALSE) 
+census_table = read.csv("Question2sample.csv", skip = 2, header = F, stringsAsFactors=FALSE)
+colnames(census_table) = headers
+#head(census_table)
+```
+
+We are interested in the Atlantic provinces of Canada. According to the map [here](http://www12.statcan.gc.ca/census-recensement/2011/dp-pd/prof/details/page.cfm?Lang=E&amp;Geo1=PR&amp;Code1=01&amp;Geo2=PR&amp;Code2=01&amp;Data=Count&amp;SearchText=Canada&amp;SearchType=Begins&amp;SearchPR=01&amp;B1=All&amp;Custom=&amp;TABID=3), they are Newfoundland and Labrador, Quebec, Prince Edward Island, New Brunswick and Nova Scotia:
+```{r}
+atlantic_provs <- c("Newfoundland and Labrador", "Quebec", "Prince Edward Island", "New Brunswick", "Nova Scotia")
+```
+The next step would be to convert the census table from long to wide format and with the rows corresponding to different categories of Family characteristic and the column giving the total number for each category for each Atlantic province. There is a complication that some subcategories in the table have the same name so they would be incorrectly aggregated. For example, sub-category with Characteristic = "Without children at home" appears twice for every province but in one case it is a sub-category of "Married couples" and in another case is a sub-category of "Common-law couples". To deal with that let's rename all sub-categories where this ambiguity happens by adding the corresponding category name to its subcategory:
+```{r warning = FALSE}
+family_classes <- c("Married couples", "Common-law couples", "Female parent", "Male parent", "Total children")
+
+for(fc in family_classes){
+        vect_married <- which(grepl(fc, census_table$Characteristic)) 
+        for(rn in vect_married){
+                #print(fc)
+                #print(rn)
+                if (fc == 'Total children') {
+                        for (i in 1:5) {
+                                census_table[rn+i, 4] <- paste("Children", census_table[rn+i, 4], "in private households")
+                        }
+                }
+                else {
+                        census_table[rn+1, 4] <- paste(fc, census_table[rn+1, 4])
+                        census_table[rn+2, 4] <- paste(fc, census_table[rn+2, 4])
+                        census_table[rn+3, 4] <- paste(fc, census_table[rn+3, 4])
+                        if (fc == "Married couples" | fc == "Common-law couples" ) {
+                                census_table[rn+4, 4] <- paste(fc, census_table[rn+4, 4])
+                                census_table[rn+5, 4] <- paste(fc, census_table[rn+5, 4])
+                        }
+                }
+        }
+}
+```
+
+Now, we can transform the table:
+```{r}
+table_3 <- dcast(census_table, Characteristic + Topic  ~ Prov_Name, value.var="Total", fun.aggregate = sum) %>%
+        filter(`Topic` == "Family characteristics" ) %>%
+        subset(select = c("Characteristic", atlantic_provs) )
+colnames(table_3) <- c("category", "NL", "QC", "PE", "NB", "NS")
+head(table_3)
+```
+
+Finally before doing some plotting and analysis, lets make some useful functions to be used for plotting. (The really useful wrapping function were found [here](https://github.com/dhduncan/ConoceR/blob/master/wrapLabelFunctions.R):
+```{r}
+# label wrapping function
+wrap.it <- function(x, len)
+{ 
+  sapply(x, function(y) paste(strwrap(y, len), 
+                              collapse = "\n"), 
+         USE.NAMES = FALSE)
+}
+
+wrap.labels <- function(x, len)
+{
+  if (is.list(x))
+  {
+    lapply(x, wrap.it, len)
+  } else {
+    wrap.it(x, len)
+  }
+}
+
+makebarplot <- function(df, cex.names = 0.7, leftmar = 20, legx = 0.1, legy = 0.2, rightmar = 2, 
+                        xtitle = "total number for each category") {
+        colpal <- brewer.pal(8, "Dark2")
+        par(mar=c(4, leftmar, 1.1, rightmar), xpd = TRUE )
+        bp <- barplot(as.matrix(df), 
+                      col=colpal, 
+                      names.arg=wrap.labels(colnames(df), 20),
+                      cex.names=cex.names,
+                      las=1,
+                      xlab = xtitle,
+                      horiz = TRUE,
+                      width = 2
+                      )
+        legend("bottomright",inset=c(legx,legy), fill=colpal, legend=rownames(df))
+}
+options(scipen = 999)
+```
+
+## Analysis
+### First let's look at the absolute numbers across Atlantic provinces for different category groups:
+***Note: the number of categories in the table is 34. It's not that big so the categories to plot below were grouped manually by their row numbers in the table***
+```{r out.width = '1000px', dpi=200}
+
+table_3_t <- t(table_3[,-1])
+colnames(table_3_t) <- table_3$category
+
+# plot for "total" characteristics
+data2plot <- table_3_t[,c(10,9,33,34)]
+makebarplot(data2plot, .7,6, 0, 0.3)
+```
+
+### Quebec dominates across all catergories and this proportion is approximately the same for other plots since the proportions are related to the total number of people living in a province. We will take a look at the "per capita" values at the end. The fraction of single parents for Atlantic region is about 8%
+```{r out.width = '1000px', dpi=200}
+# plot for sizes of families
+data2plot <- table_3_t[,c(8:5)]
+makebarplot(data2plot, .7,6, 0, 0.3)
+```
+
+### The numbers look reasonable. Smaller families are more numerous
+```{r out.width = '1000px', dpi=200}
+# plot for married couples
+data2plot <- table_3_t[,c(30:28,31:32,4)]
+makebarplot(data2plot, .7,6, 0, 0.3)
+# plot for common-law couples
+data2plot <- table_3_t[,c(19:17,21:20,1)]
+makebarplot(data2plot, .7,7, 0, 0.3)
+```
+
+### The two plots above show an interesting change in proportions. Quebec has larger number of common-law couples compared to married couples.
+```{r out.width = '1000px', dpi=200}
+# plot for female single parents
+data2plot <- table_3_t[,c(24:22,2)]
+makebarplot(data2plot, .7,6, 0, 0.3)
+# plot for male single parents
+data2plot <- table_3_t[,c(27:25,3)]
+makebarplot(data2plot, .7,6, 0, 0.3)
+```
+
+### Looking at the axis scale, one can see from the two plots above that the number of single female parents is ~3.5 times larger than the number of single male parents
+```{r out.width = '1000px', dpi=200}
+# plot for children
+data2plot <- table_3_t[,c(14:12,15:16)]
+makebarplot(data2plot, .7,6, 0, 0.3)
+```
+
+### Children between 6 and 14 years is the most numerous category across all Atlantic provinces
+```{r out.width = '1000px', dpi=200}
+```
+
+***Note: there is hidden section here with the plots in terms of proportions instead of absolute numbers. They are not that revealing. They can be enabled my commenting out "echo=FALSE" and "fig.show = 'hide'" options*** in the .Rmd file
+```{r out.width = '1000px', dpi=200, echo=FALSE, fig.show = 'hide'}
+props <- cbind(table_3[1], prop.table(as.matrix(table_3[-1]), margin = 1))
+props_t <- as.data.frame(t(props[,-1]))
+colnames(props_t) <- props$category
+
+xtitle <- "proportions between provinces for each category"
+data2plot <- props_t[,c(10,9,33,34)]
+makebarplot(data2plot, .7,6, -0.18, 0.3,4.5, xtitle)
+data2plot <- props_t[,c(8:5)]
+makebarplot(data2plot, .7,6, -0.18, 0.3,4.5, xtitle)
+data2plot <- props_t[,c(30:28,31:32,4)]
+makebarplot(data2plot, .7,6, -0.18, 0.3,4.5, xtitle)
+data2plot <- props_t[,c(19:17,21:20,1)]
+makebarplot(data2plot, .7,7, -0.18, 0.3,4.5, xtitle)
+data2plot <- props_t[,c(24:22,2)]
+makebarplot(data2plot, .7,6, -0.18, 0.3,4.5, xtitle)
+data2plot <- props_t[,c(27:25,3)]
+makebarplot(data2plot, .7,6, -0.18, 0.3,4.5, xtitle)
+data2plot <- props_t[,c(14:12,15:16)]
+makebarplot(data2plot, .7,6, -0.18, 0.3,4.5, xtitle)
+```
+
+### Let's now look at the "per capita" of each category for each province to get a more representative comparison between the provinces:
+```{r out.width = '1000px', dpi=200}
+table_3b <- table_3 %>%
+        mutate(NL = NL/census_table[which((census_table$Prov_Name == atlantic_provs[1] ) 
+                                          & (census_table$Characteristic == "Population in 2011")), 6]) %>%
+        mutate(QC = QC/census_table[which((census_table$Prov_Name == atlantic_provs[2] ) 
+                                          & (census_table$Characteristic == "Population in 2011")), 6]) %>%
+        mutate(PE = PE/census_table[which((census_table$Prov_Name == atlantic_provs[3] ) 
+                                          & (census_table$Characteristic == "Population in 2011")), 6]) %>%
+        mutate(NB = NB/census_table[which((census_table$Prov_Name == atlantic_provs[4] ) 
+                                          & (census_table$Characteristic == "Population in 2011")), 6]) %>%
+        mutate(NS = NS/census_table[which((census_table$Prov_Name == atlantic_provs[5] ) 
+                                          & (census_table$Characteristic == "Population in 2011")), 6])
+
+#table_3b_t <-t(table_3b[,-1])
+#colnames(table_3b_t) <- table_3b$category
+
+props <- cbind(table_3b[1], prop.table(as.matrix(table_3b[-1]), margin = 1))
+props_t <- as.data.frame(t(props[,-1]))
+colnames(props_t) <- props$category
+
+xtitle <- "proportions between provinces per capita and notmalized to 1.0"
+
+# plot for "total" characteristics
+data2plot <- props_t[,c(10,9,33,34)]
+makebarplot(data2plot, .7,6,  -0.18, 0.3,4.5, xtitle)
+# plot for sizes of families
+data2plot <- props_t[,c(8:5)]
+makebarplot(data2plot, .7,6, -0.18, 0.3,4.5, xtitle)
+```
+
+### It is interesting that Prince Edward Island has the highest per capita number of families with 5 and more people
+```{r out.width = '1000px', dpi=200}
+# plot for married couples
+data2plot <- props_t[,c(30:28,31:32,4)]
+makebarplot(data2plot, .7,6, -0.18, 0.3,4.5, xtitle)
+```
+
+### Similarly, Prince Edward Island has the highest per capita number of married couples with more than 3 children
+```{r out.width = '1000px', dpi=200}
+# plot for common-law couples
+data2plot <- props_t[,c(19:17,21:20,1)]
+makebarplot(data2plot, .7,7, -0.18, 0.3,4.5, xtitle)
+```
+
+### One can see than common-law couples per capita the largest in Quebec across all "common-law" categories
+```{r out.width = '1000px', dpi=200}
+# plot for female single parents
+data2plot <- props_t[,c(24:22,2)]
+makebarplot(data2plot, .7,6, -0.18, 0.3,4.5, xtitle)
+# plot for male single parents
+data2plot <- props_t[,c(27:25,3)]
+makebarplot(data2plot, .7,6, -0.18, 0.3,4.5, xtitle)
+# plot for children
+data2plot <- props_t[,c(14:12,15:16)]
+makebarplot(data2plot, .7,6, -0.18, 0.3,4.5, xtitle)
+```
+
+## Summary
+In general, the proportion structure for different family categories is very simular across categories and across Atlantic provinces. Quebec has the largest population and should be representative to reach out to families from all categories as long as possible language and cultural differences are not of concern in a survey. Some specific points to notice:
+
+  * there is about 3.5 more single female parents than male parents in Atlantic region
+  * children between ages 6 and 14 is the most numerous children category in Atlantic region
+  * Quebec has a larger fraction of common-law couples than married couples compared to other provinces
+  * Prince Edward Island has the higest fraction per capita of large size families with 5 people and married couples with 3 or more children
+
+As a possible continuation of the analysis, it would be good to look at the ratios between different categories for different provinces (for example, at the ratio of female parents with 1, 2 or 3 and more children) to see if there are any insights specific to a particular province.
+
